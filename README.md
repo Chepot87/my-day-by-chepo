@@ -6,7 +6,7 @@ Organizador personal en español: plan diario y semanal, rutinas editables, vier
 
 `node server.mjs` abre un servidor local en http://127.0.0.1:4173.
 
-`node --test tests/core.test.mjs` ejecuta las 14 pruebas de planificación, reprogramación, OT, respaldo y conservación de datos.
+`node --test tests/core.test.mjs` ejecuta las pruebas de planificación, reprogramación, OT, respaldo y conservación de datos.
 
 ## GitHub Pages
 
@@ -14,7 +14,7 @@ La app no necesita instalación ni compilación. Los archivos de la app están e
 
 ## Datos
 
-Esta versión guarda tareas y notas en localStorage. El navegador ofrece un respaldo JSON en Ajustes. Los datos que introduzcas no se suben al repositorio. La rutina inicial incluida en core.mjs forma parte del código de la app. Publicar la app no añade sincronización entre dispositivos; esa función requiere almacenamiento y autenticación del lado del servidor.
+Esta versión guarda tareas y notas en localStorage. El navegador ofrece un respaldo JSON en Ajustes. Los datos que introduzcas no se suben al repositorio. La app pública empieza sin tareas ni horarios personales. Un plan se importa desde un archivo JSON y permanece en el navegador; los respaldos personales no se incluyen en el repositorio. Publicar la app no añade sincronización entre dispositivos; esa función requiere almacenamiento y autenticación del lado del servidor.
 
 Los compromisos fijos y los extras opcionales quedan fuera del porcentaje de tareas esenciales. El contador de entrenamiento cuenta días distintos; permite reubicar sesiones. Viernes libre/OT se decide por semana y conserva los cambios que ya hiciste en tareas individuales.
 

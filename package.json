@@ -1,0 +1,10 @@
+{
+  "name": "my-day-by-chepo",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node server.mjs",
+    "test": "node --test tests/core.test.mjs",
+    "check": "node --check app.mjs && node --check core.mjs && node --check sw.js"
+  }
+}

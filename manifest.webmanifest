@@ -1,0 +1,18 @@
+{
+  "name": "My Day by Chepo",
+  "short_name": "My Day",
+  "description": "Tu día, a tu ritmo.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#141817",
+  "theme_color": "#141817",
+  "icons": [
+    {
+      "src": "./icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}
