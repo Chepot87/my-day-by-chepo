@@ -21,7 +21,7 @@ function worker() {
 }
 test('offline shell uses one complete asset release even with an older query string',async()=>{
   const w=worker();await w.lifecycle('install');
-  for(const name of ['app.mjs','core.mjs','styles.css']){const response=await w.request(name+'?v=old');assert.equal(response.status,200);assert.match(await response.text(),/20261120-2/);}
+  for(const name of ['app.mjs','core.mjs','styles.css']){const response=await w.request(name+'?v=old');assert.equal(response.status,200);assert.match(await response.text(),/20261120-3/);}
   assert.equal(w.networkCalls,0);
 });
 test('worker leaves other applications and non-GET requests alone',async()=>{

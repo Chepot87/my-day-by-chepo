@@ -1,4 +1,4 @@
-const RELEASE = '20261120-2';
+const RELEASE = '20261120-3';
 const PREFIX = `my-day-by-chepo:${new URL(self.registration.scope).pathname}:`;
 const CACHE = PREFIX + RELEASE;
 const SHELL = ['./', './index.html', `./styles.css?v=${RELEASE}`, `./app.mjs?v=${RELEASE}`, `./core.mjs?v=${RELEASE}`, './icon.svg', './manifest.webmanifest'];
