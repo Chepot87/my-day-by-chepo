@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { makeInitialState, tasksFor, putTask, removeTask, moveTask, validateState, weekFor, addDays, validDate, dayStats, weekPlan, upgradePlan, workoutStats } from '../core.mjs';
+import { makeInitialState, tasksFor, putTask, removeTask, moveTask, validateState, weekFor, addDays, validDate, dayStats, weekPlan, upgradePlan, workoutStats, toggleWorkoutDay, readSavedState, validTimerSnapshot } from '../core.mjs';
 
 // Synthetic fixtures: no user's personal plan is included.
 function fixture() {
@@ -32,3 +32,57 @@ test('late OT never wraps the workout into an earlier time',()=>{const s=fixture
 test('upgrades retain imported records and never inject presets',()=>{const s=fixture();delete s.planRevision;delete s.weekPlans;s.notes['2026-11-17']='Example note';const ids=s.routines.map(r=>r.id);upgradePlan(s);upgradePlan(s);assert.deepEqual(s.routines.map(r=>r.id),ids);assert.equal(s.notes['2026-11-17'],'Example note');});
 test('dates cross year boundaries without UTC drift',()=>{assert.equal(addDays('2026-12-31',1),'2027-01-01');assert.deepEqual(weekFor('2027-01-03'),['2026-12-28','2026-12-29','2026-12-30','2026-12-31','2027-01-01','2027-01-02','2027-01-03']);assert.equal(validDate('2026-02-30'),false);});
 test('invalid backup data is rejected',()=>{const s=fixture();assert.equal(validateState(s),s);const area=structuredClone(s);area.routines[0].area='toString';assert.throws(()=>validateState(area));const time=structuredClone(s);time.routines[0].time='35:99';assert.throws(()=>validateState(time));const setting=structuredClone(s);setting.settings.otStart='<invalid>';assert.throws(()=>validateState(setting));assert.throws(()=>validateState({version:1,tasks:[]}));});
+test('tracker marks and unmarks a planned day without changing adjacent days',()=>{
+  const s=fixture();
+  assert.equal(toggleWorkoutDay(s,'2026-11-16').status,'done');
+  assert.equal(workoutStats(s,'2026-11-19').done,1);
+  assert.equal(workoutStats(s,'2026-11-26').done,0);
+  const restored=validateState(JSON.parse(JSON.stringify(s)));
+  assert.equal(workoutStats(restored,'2026-11-19').done,1);
+  assert.equal(toggleWorkoutDay(restored,'2026-11-16').status,'pending');
+  assert.equal(workoutStats(restored,'2026-11-19').done,0);
+});
+test('an empty tracker day does not invent a completed workout',()=>{
+  const s=makeInitialState(),before=JSON.stringify(s);
+  assert.equal(toggleWorkoutDay(s,'2026-11-17').status,'empty');
+  assert.equal(JSON.stringify(s),before);
+});
+test('unmarking a day clears every completed session on that date',()=>{
+  const s=fixture();toggleWorkoutDay(s,'2026-11-16');
+  const extra={...tasksFor(s,'2026-11-16').find(t=>t.workout),id:'another-completed-session'};delete extra.routineId;s.tasks.push(extra);
+  assert.equal(workoutStats(s,'2026-11-19').done,1);
+  toggleWorkoutDay(s,'2026-11-16');
+  assert.equal(workoutStats(s,'2026-11-19').done,0);
+});
+test('legacy movement tasks still count while explicit non-workouts do not',()=>{
+  const s=makeInitialState(),t={id:'legacy',title:'Example movement',area:'salud',time:'',minutes:20,note:'',date:'2026-11-17',done:false};s.tasks.push(t);
+  assert.equal(workoutStats(s,'2026-11-19').planned,1);
+  t.workout=false;assert.equal(workoutStats(s,'2026-11-19').planned,0);
+});
+test('backup maps and flags are strictly validated to prevent silent data loss',()=>{
+  for(const field of ['notes','rhythms','settings','overrides']){const s=fixture();s[field]=[];assert.throws(()=>validateState(s));}
+  for(const field of ['done','workout','optional','fixed','priority']){const s=fixture();s.routines[0][field]='false';assert.throws(()=>validateState(s));}
+  const duplicate=fixture();duplicate.routines.push({...duplicate.routines[0]});assert.throws(()=>validateState(duplicate));
+  const unsafe=fixture();unsafe.routines[0].id='__proto__';assert.throws(()=>validateState(unsafe));
+});
+test('corrupt saved data is retained for recovery without overwriting it',()=>{
+  const raw='{broken json',result=readSavedState(()=>raw);
+  assert.equal(result.corruptData,true);assert.equal(result.rawData,raw);assert.equal(result.storageError,true);
+  assert.deepEqual(result.state.tasks,[]);
+});
+test('blocked browser storage is not misclassified as corrupt data',()=>{
+  const result=readSavedState(()=>{throw new Error('Storage blocked');});
+  assert.equal(result.storageError,true);assert.equal(result.corruptData,false);assert.equal(result.rawData,null);
+  assert.equal(validateState(result.state),result.state);
+});
+test('valid saved data preserves notes and completion',()=>{
+  const s=fixture();s.notes['2026-11-17']='Keep this';toggleWorkoutDay(s,'2026-11-16');
+  const restored=readSavedState(()=>JSON.stringify(s));
+  assert.equal(restored.corruptData,false);assert.equal(restored.storageError,false);
+  assert.equal(restored.state.notes['2026-11-17'],'Keep this');assert.equal(workoutStats(restored.state,'2026-11-19').done,1);
+});
+test('malformed timer snapshots reset instead of rendering invalid time',()=>{
+  assert.equal(validTimerSnapshot({remaining:1500,running:false,endAt:null}),true);
+  assert.equal(validTimerSnapshot({remaining:1500,running:true,endAt:Date.now()+1500000}),true);
+  for(const value of [null,{}, {remaining:-1,running:false,endAt:null}, {remaining:1500,running:true,endAt:null}, {remaining:1500,running:'yes',endAt:1}])assert.equal(validTimerSnapshot(value),false);
+});

@@ -1,4 +1,4 @@
-import { AREAS, DAYS, WEEK_ORDER, dateKey, asDate, addDays, weekFor, validDate, uid, makeInitialState, tasksFor, putTask, removeTask, moveTask, dayStats, validateState, upgradePlan, weekPlan, workoutStats, isWorkout, timeMinutes } from './core.mjs';
+import { AREAS, DAYS, WEEK_ORDER, dateKey, asDate, addDays, weekFor, validDate, uid, makeInitialState, tasksFor, putTask, removeTask, moveTask, dayStats, validateState, upgradePlan, weekPlan, workoutStats, isWorkout, timeMinutes, toggleWorkoutDay, readSavedState, validTimerSnapshot } from './core.mjs?v=20261120-2';
 
 const STORAGE = 'chepo-mi-dia-v1';
 const IMPORT_BACKUP = 'chepo-mi-dia-before-import';
@@ -22,27 +22,30 @@ const paths = {
   backup: '<path d="M12 3v12m-4-4 4 4 4-4M4 16v4h16v-4"/>'
 };
 function icon(name) { return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name] || paths.spark}</svg>`; }
-let state;
-let storageError = false;
-let corruptData = false;
-try {
-  const raw = localStorage.getItem(STORAGE);
-  state = raw ? upgradePlan(validateState(JSON.parse(raw))) : makeInitialState();
-} catch {
-  state = makeInitialState(); storageError = true; corruptData = true;
-}
+const loaded = readSavedState(() => localStorage.getItem(STORAGE));
+let state = loaded.state;
+let storageError = loaded.storageError;
+let corruptData = loaded.corruptData;
+let recoveryData = loaded.corruptData ? loaded.rawData : null;
 let selected = dateKey();
 let route = ['day', 'week', 'routine', 'settings'].includes(location.hash.slice(1)) ? location.hash.slice(1) : 'week';
 let filter = 'all';
 let routineDay = asDate(selected).getDay();
 let editing = null;
 let editingRoutine = null;
+let draftDate = null;
 let toastTimeout;
 let undoAction;
 let timer = { remaining: state.settings.focusMinutes * 60, endAt: null, running: false };
-try { const saved = JSON.parse(sessionStorage.getItem('mi-dia-timer')); if (saved && Number.isFinite(saved.remaining) && (!saved.endAt || Number.isFinite(saved.endAt))) timer = saved; } catch {}
+try { const saved = JSON.parse(sessionStorage.getItem('mi-dia-timer')); if (validTimerSnapshot(saved)) timer = saved; } catch {}
 
+function invalidateUndo() {
+  if (!undoAction) return;
+  undoAction = null;
+  $('#toast [data-action="undo"]')?.remove();
+}
 function persist() {
+  invalidateUndo();
   if (corruptData) { toast('No se guardó: exporta tus datos anteriores desde Ajustes antes de reemplazarlos.'); return false; }
   try { localStorage.setItem(STORAGE, JSON.stringify(state)); storageError = false; updateSaveStatus(); return true; }
   catch { storageError = true; updateSaveStatus(); toast('No se pudo guardar. Descarga un respaldo desde Ajustes.'); return false; }
@@ -109,9 +112,9 @@ function tasksCard() {
   return `<section class="card task-card" aria-labelledby="tasks-title"><div class="card-heading"><h2 id="tasks-title">Tu plan del día <span class="count-pill">${stats.total - stats.done}</span></h2><span>${selected === dateKey() ? 'HOY' : asDate(selected).toLocaleDateString('es-PR', { day: 'numeric', month: 'short' })}</span></div><div class="filters"><button class="filter ${filter === 'all' ? 'active' : ''}" data-action="filter" data-filter="all" aria-pressed="${filter === 'all'}">Todo</button><button class="filter ${filter === 'priority' ? 'active' : ''}" data-action="filter" data-filter="priority" aria-pressed="${filter === 'priority'}">★ Prioridades</button><label class="filter filter-select ${Object.hasOwn(AREAS, filter) ? 'active' : ''}"><select id="area-filter" aria-label="Filtrar por área"><option value="all">Todas las áreas</option>${Object.entries(AREAS).map(([key, area]) => `<option value="${key}" ${filter === key ? 'selected' : ''}>${area.name}</option>`).join('')}</select></label></div>${anchors.length ? `<div class="anchor-section"><h3 class="section-label">Compromisos fijos</h3>${anchors.map(anchorRow).join('')}</div>` : ''}${pending.length ? `<div class="task-list"><h3 class="section-label">Lo esencial</h3>${pending.map(taskRow).join('')}</div>` : `<div class="empty-state"><span class="empty-icon" aria-hidden="true">${allDone ? '✓' : '✦'}</span><h3>${allDone ? 'Lo esencial, resuelto.' : filter !== 'all' ? 'Todo despejado por aquí.' : 'El descanso está en el plan.'}</h3><p>${allDone ? 'Lo que hiciste cuenta. Lo opcional es un extra.' : filter !== 'all' ? 'Prueba otra área para ver el resto de tu día.' : 'Come, descansa y recupera energía. Los extras de abajo pueden esperar.'}</p></div>`}${optional.length ? `<details class="optional-section" open><summary>Si queda energía <span>${optional.length} opcionales</span></summary><div class="task-list">${optional.map(taskRow).join('')}</div></details>` : ''}${done.length ? `<details class="completed" ${!pending.length ? 'open' : ''}><summary>Hechas · ${done.length}</summary><div class="task-list">${done.map(taskRow).join('')}</div></details>` : ''}<form id="quick-add" class="quick-add"><span aria-hidden="true">＋</span><input name="title" maxlength="180" required autocomplete="off" aria-label="Añadir una tarea rápida" placeholder="Algo más para este día…"><button type="submit">Añadir</button></form></section>`;
 }
 function workoutPanel(compact = false) {
-  const stats = workoutStats(state, selected);
-  const message = stats.done >= 3 ? 'Tres días cumplidos. Dale crédito a esa constancia.' : stats.planned >= 3 ? 'Hay tres días reservados. Puedes reubicar las sesiones.' : `Hay ${stats.planned} días agendados; reserva ${3 - stats.planned} más para llegar a la meta.`;
-  return `<section class="card workout-panel ${compact ? 'compact' : ''}"><div class="workout-heading"><div><span class="eyebrow">DISCIPLINA, MÚSCULO Y ENFOQUE</span><h2>Tres días para ti.</h2></div><div class="workout-total"><strong>${stats.done}</strong><span>/ 3 días</span></div></div><div class="workout-week" aria-label="Entrenamientos de esta semana">${stats.days.map(d => `<button class="workout-day ${d.done ? 'done' : d.planned ? 'planned' : ''}" data-action="open-day" data-date="${d.date}" aria-label="${DAYS[asDate(d.date).getDay()]}: ${d.done ? 'entrenamiento completado' : d.planned ? 'entrenamiento programado' : 'sin entrenamiento'}"><span>${DAYS[asDate(d.date).getDay()].slice(0, 3)}</span><i aria-hidden="true">${d.done ? '✓' : d.planned ? '○' : '·'}</i></button>`).join('')}</div><p>${message}</p><button class="button ghost" data-action="add-workout">Reservar otro entrenamiento</button></section>`;
+  const stats = workoutStats(state, selected), remaining = Math.max(0, stats.target - stats.planned);
+  const message = stats.done >= stats.target ? 'Meta cumplida. Tres días de constancia: eso cuenta.' : !stats.planned ? 'Aún no hay sesiones programadas. Importa tu plan o reserva tu primer entrenamiento.' : remaining ? `Hay ${stats.planned} ${stats.planned === 1 ? 'día programado' : 'días programados'}; reserva ${remaining} más para llegar a la meta.` : 'Ya tienes tres días reservados. Marca cada uno cuando completes la sesión.';
+  return `<section class="card workout-panel ${compact ? 'compact' : ''}" aria-label="Meta semanal de entrenamiento"><div class="workout-heading"><div><span class="eyebrow">DISCIPLINA, MÚSCULO Y ENFOQUE</span><h2>Tres días para ti.</h2></div><div class="workout-total" aria-label="${stats.done} de ${stats.target} días completados"><strong>${stats.done}</strong><span>/ ${stats.target} días<br><small>completados</small></span></div></div><div class="workout-week" aria-label="Entrenamientos de esta semana">${stats.days.map(d => { const day = DAYS[asDate(d.date).getDay()], action = d.done ? 'Desmarcar entrenamiento' : d.planned ? 'Marcar entrenamiento completado' : 'Reservar entrenamiento'; return `<button class="workout-day ${d.done ? 'done' : d.planned ? 'planned' : ''}" data-action="workout-day" data-date="${d.date}" aria-pressed="${d.done}" aria-label="${action}: ${day}, ${asDate(d.date).getDate()}" title="${action}"><span>${day.slice(0,3)}</span><i aria-hidden="true">${d.done ? '✓' : d.planned ? '○' : '+'}</i><small>${d.done ? 'Hecho' : d.planned ? 'Listo' : 'Reservar'}</small></button>`; }).join('')}</div><p>${message}</p><p class="workout-help">Toca un día para reservarlo o marcar la sesión como hecha. ○ Programado · ✓ Completado.</p><button class="button ghost" data-action="add-workout">${stats.planned ? 'Reservar otro entrenamiento' : 'Reservar entrenamiento'}</button></section>`;
 }
 function weekModeCard() {
   const plan = weekPlan(state, selected), friday = weekFor(selected)[4];
@@ -140,7 +143,7 @@ function routineView() {
   return `${intro('UNA BASE QUE SE ADAPTA A TI', 'Tu rutina. Tus reglas.', 'Lo fijo tiene su espacio. Lo opcional también tiene permiso para esperar.')}<div class="routine-intro"><strong>Tu rutina es personal.</strong> Añade lo que quieres repetir, diferencia los compromisos fijos de las tareas opcionales y reubica entrenamientos cuando haga falta. La meta es de tres días por semana. Puedes importar un plan propio desde Ajustes; sus datos permanecen en tu navegador.</div><div class="routine-day-tabs" aria-label="Día de la rutina">${WEEK_ORDER.map(d => `<button class="routine-tab ${d === routineDay ? 'active' : ''}" data-action="routine-day" data-day="${d}" aria-pressed="${d === routineDay}">${DAYS[d].slice(0, 3)}</button>`).join('')}</div><section class="card routine-list"><div class="card-heading"><h2>${DAYS[routineDay]} <span class="count-pill">${routines.length}</span></h2><span>BASE SEMANAL</span></div>${routines.map(r => `<div class="task-row" data-routine-id="${esc(r.id)}"><span class="routine-symbol" style="--area:${AREAS[r.area].color}">${AREAS[r.area].symbol}</span><div><button class="task-title" data-action="edit-routine">${esc(r.title)}${r.priority ? '<span class="priority-star">★</span>' : ''}</button><div class="task-meta">${areaBadge(r.area)}<span>${timeLabel(r.time)}</span>${r.minutes ? `<span>· ${duration(r.minutes)}</span>` : ''}${r.fixed ? '<span class="anchor-tag">FIJO</span>' : ''}${r.optional ? '<span class="optional-tag">OPCIONAL</span>' : ''}${isWorkout(r) ? '<span class="workout-tag">ENTRENO</span>' : ''}${r.friday ? `<span class="condition-tag">SOLO ${r.friday === 'ot' ? 'CON OT' : 'VIERNES LIBRE'}</span>` : ''}</div><div class="routine-days-label">${WEEK_ORDER.filter(d => r.days.includes(d)).map(d => DAYS[d].slice(0, 3)).join(' · ')}${r.id === 'plan-workout-fri' ? ' · con OT: 25 min después del turno' : r.id === 'plan-project-fri' ? ' · con OT: 15 min opcionales' : ''}</div></div><button class="icon-button" data-action="edit-routine" aria-label="Editar rutina: ${esc(r.title)}">${icon('edit')}</button></div>`).join('') || '<div class="empty-state"><h3>Este día está libre.</h3><p>Añade una rutina si hay algo que quieres repetir.</p></div>'}<div class="quick-add"><span aria-hidden="true">＋</span><button class="button ghost" data-action="add-routine">Añadir a mi rutina</button></div></section>`;
 }
 function settingsView() {
-  return `${intro('HAZLO TUYO', 'Un espacio que se sienta tuyo.', 'Cambia lo básico, cuida tus datos y llévalo contigo.')}<div class="settings-layout"><section class="card settings-card"><h2>A tu manera</h2><p>Los pequeños detalles también hacen la diferencia.</p><form id="settings-form"><label>¿Cómo te llamamos?<input name="name" value="${esc(state.settings.name)}" required maxlength="40"></label><label>Minutos por sesión de enfoque<input name="focusMinutes" type="number" min="5" max="120" value="${state.settings.focusMinutes}" required></label><label>Un toque de color</label><div class="accent-picker">${[['lime', '#d1f86b', 'Lima'], ['violet', '#c9b4ff', 'Violeta'], ['cyan', '#8ce5e1', 'Cian']].map(([value, color, label]) => `<button type="button" class="accent-choice ${state.settings.accent === value ? 'selected' : ''}" style="--swatch:${color}" data-action="accent" data-accent="${value}" aria-pressed="${state.settings.accent === value}" aria-label="Color ${label}">${state.settings.accent === value ? icon('check') : ''}</button>`).join('')}</div><button class="button primary" type="submit">Guardar ajustes</button></form></section><section class="card settings-card"><h2>Tus datos, contigo</h2><p>Las tareas, las notas y tu progreso se guardan automáticamente <strong>en este navegador y dispositivo</strong>. Si borras los datos del navegador, puedes perderlos.</p><div class="backup-info"><strong>Respaldo completo</strong><br>Descárgalo para proteger tu progreso o importarlo en otro equipo. Esta versión todavía no sincroniza entre celular y PC.</div><div class="settings-actions"><button class="button primary" data-action="export">${icon('backup')} Descargar respaldo</button><button class="button secondary" data-action="import">Importar respaldo</button></div>${corruptData ? '<div class="storage-warning">El guardado anterior no se pudo leer. Se conservó sin sobrescribir. Descárgalo antes de importar un respaldo válido.</div>' : ''}<div class="install-help"><strong>Ábrelo como app</strong>En Chrome o Edge, usa «Instalar aplicación» si aparece en el menú. En el celular, prueba «Añadir a pantalla de inicio». La disponibilidad depende del navegador.</div></section><section class="card settings-card full-width"><h2>Espacio para todas tus partes</h2><p>Al crear una tarea, escoge un área. Después puedes filtrar tu día sin perder el resto.</p><div class="areas-grid">${Object.values(AREAS).map(a => `<div class="area-tile" style="--area:${a.color}"><span>${a.symbol}</span>${a.name}</div>`).join('')}</div></section></div>`;
+  return `${intro('HAZLO TUYO', 'Un espacio que se sienta tuyo.', 'Cambia lo básico, cuida tus datos y llévalo contigo.')}<div class="settings-layout"><section class="card settings-card"><h2>A tu manera</h2><p>Los pequeños detalles también hacen la diferencia.</p><form id="settings-form"><label>¿Cómo te llamamos?<input name="name" value="${esc(state.settings.name)}" required maxlength="40"></label><label>Minutos por sesión de enfoque<input name="focusMinutes" type="number" min="5" max="120" value="${state.settings.focusMinutes}" required></label><label>Un toque de color</label><div class="accent-picker">${[['lime', '#d1f86b', 'Lima'], ['violet', '#c9b4ff', 'Violeta'], ['cyan', '#8ce5e1', 'Cian']].map(([value, color, label]) => `<button type="button" class="accent-choice ${state.settings.accent === value ? 'selected' : ''}" style="--swatch:${color}" data-action="accent" data-accent="${value}" aria-pressed="${state.settings.accent === value}" aria-label="Color ${label}">${state.settings.accent === value ? icon('check') : ''}</button>`).join('')}</div><button class="button primary" type="submit">Guardar ajustes</button></form></section><section class="card settings-card"><h2>Tus datos, contigo</h2><p>Las tareas, las notas y tu progreso se guardan automáticamente <strong>en este navegador y dispositivo</strong>. Si borras los datos del navegador, puedes perderlos.</p><div class="backup-info"><strong>Respaldo completo</strong><br>Descárgalo para proteger tu progreso o importarlo en otro equipo. Esta versión todavía no sincroniza entre celular y PC.</div><div class="settings-actions"><button class="button primary" data-action="export">${icon('backup')} Descargar respaldo</button><button class="button secondary" data-action="import">Importar respaldo</button></div>${corruptData ? '<button class="button secondary" data-action="export-recovery">Descargar guardado anterior</button><div class="storage-warning">El guardado anterior no se pudo leer y se conservó. Descarga el archivo original para recuperarlo, o importa un respaldo válido. El botón principal descarga el plan actual.</div>' : ''}<div class="install-help"><strong>Ábrelo como app</strong>En Chrome o Edge, usa «Instalar aplicación» si aparece en el menú. En el celular, prueba «Añadir a pantalla de inicio». La disponibilidad depende del navegador.</div></section><section class="card settings-card full-width"><h2>Espacio para todas tus partes</h2><p>Al crear una tarea, escoge un área. Después puedes filtrar tu día sin perder el resto.</p><div class="areas-grid">${Object.values(AREAS).map(a => `<div class="area-tile" style="--area:${a.color}"><span>${a.symbol}</span>${a.name}</div>`).join('')}</div></section></div>`;
 }
 function render() {
   nav(); applySettings();
@@ -150,12 +153,13 @@ function render() {
 }
 function fillAreas(form) { form.elements.area.innerHTML = Object.entries(AREAS).map(([id, area]) => `<option value="${id}">${area.name}</option>`).join(''); }
 function dayChecks(container, days = [], name = 'days') { container.innerHTML = WEEK_ORDER.map(d => `<label><input type="checkbox" name="${name}" value="${d}" ${days.includes(d) ? 'checked' : ''}><span>${DAYS[d].slice(0, 3)}</span></label>`).join(''); }
-function openTask(task = null, asRoutine = false) {
+function openTask(task = null, asRoutine = false, date = selected) {
   editing = task;
   const form = $('#task-form'); form.reset(); fillAreas(form);
   $('#task-dialog-title').textContent = task ? 'Ajusta el plan.' : asRoutine ? 'Una rutina para ti.' : 'Una cosa a la vez.';
   form.elements.title.value = task?.title || '';
-  form.elements.date.value = task?.date || selected;
+  form.elements.date.value = task?.date || date;
+  draftDate = form.elements.date.value;
   form.elements.area.value = task?.area || 'personal';
   form.elements.time.value = task?.time || '';
   form.elements.minutes.value = task?.minutes ?? 30;
@@ -168,11 +172,20 @@ function openTask(task = null, asRoutine = false) {
   $('#repeat-fields').hidden = !!task;
   $('#edit-hint').hidden = !task?.routineId;
   $('#form-error').textContent = '';
-  dayChecks($('#repeat-days .weekday-checkboxes'), [asRoutine ? routineDay : asDate(selected).getDay()]);
+  dayChecks($('#repeat-days .weekday-checkboxes'), [asRoutine ? routineDay : asDate(draftDate).getDay()]);
   form.elements.repeat.checked = asRoutine;
   $('#repeat-days').hidden = !asRoutine;
   $('#task-dialog').showModal();
   form.elements.title.focus();
+}
+function openWorkout(date = selected) {
+  openTask(null, false, date);
+  const form = $('#task-form');
+  $('#task-dialog-title').textContent = 'Reserva tu entrenamiento.';
+  form.elements.title.value = 'Entrenamiento';
+  form.elements.area.value = 'salud';
+  form.elements.workout.checked = true;
+  form.elements.minutes.value = 35;
 }
 function openRoutine(id) {
   editingRoutine = state.routines.find(r => r.id === id);
@@ -235,9 +248,14 @@ function toggleTimer() {
 }
 function resetTimer() { timer = { remaining: state.settings.focusMinutes * 60, endAt: null, running: false }; saveTimer(); updateTimerUI(); }
 function download(content, name) { const a = document.createElement('a'), url = URL.createObjectURL(new Blob([content], { type: 'application/json' })); a.href = url; a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); }
+function exportRecovery() {
+  if (!recoveryData) return;
+  download(recoveryData, `mi-dia-recuperacion-${dateKey()}.json`);
+  toast('Guardado anterior descargado para recuperación.');
+}
 function exportData() {
-  if (corruptData) { try { download(localStorage.getItem(STORAGE) || '{}', `mi-dia-recuperacion-${dateKey()}.json`); toast('Guardado anterior descargado para recuperación.'); } catch { toast('No se pudo leer el guardado anterior.'); } }
-  else { download(JSON.stringify(state, null, 2), `mi-dia-respaldo-${dateKey()}.json`); toast('Respaldo descargado. Guárdalo donde lo encuentres.'); }
+  download(JSON.stringify(state, null, 2), `mi-dia-respaldo-${dateKey()}.json`);
+  toast('Respaldo del plan actual descargado.');
 }
 async function importData(file) {
   if (!file) return;
@@ -247,11 +265,11 @@ async function importData(file) {
     // Keep the previous data before replacing anything, including damaged raw data.
     const raw = localStorage.getItem(STORAGE);
     if (raw) localStorage.setItem(IMPORT_BACKUP, raw);
-    const previous = structuredClone(state), wasCorrupt = corruptData;
+    const previous = structuredClone(state), wasCorrupt = corruptData, previousRecovery = recoveryData;
     localStorage.setItem(STORAGE, JSON.stringify(imported));
-    state = imported; corruptData = false; storageError = false;
+    invalidateUndo(); state = imported; corruptData = false; storageError = false; recoveryData = null;
     resetTimer(); applySettings(); render();
-    toast('Respaldo importado. El anterior quedó protegido.', () => { state = previous; corruptData = wasCorrupt; if (raw) localStorage.setItem(STORAGE, raw); else localStorage.removeItem(STORAGE); applySettings(); resetTimer(); render(); toast('Importación deshecha.'); });
+    toast('Respaldo importado. El anterior quedó protegido.', () => { state = previous; corruptData = wasCorrupt; recoveryData = previousRecovery; if (raw) localStorage.setItem(STORAGE, raw); else localStorage.removeItem(STORAGE); applySettings(); resetTimer(); render(); toast('Importación deshecha.'); });
   } catch (e) { toast(e instanceof SyntaxError ? 'Ese archivo no contiene JSON válido.' : e.message || 'No se pudo importar el archivo.'); }
   finally { $('#import-file').value = ''; }
 }
@@ -268,7 +286,12 @@ document.addEventListener('click', event => {
   else if (action === 'filter') { filter = button.dataset.filter; render(); }
   else if (action === 'toggle' && task) { putTask(state, { ...task, done: !task.done }); persist(); render(); if (!task.done) toast('Una menos. Eso cuenta. ✓'); }
   else if ((action === 'edit' || action === 'reschedule') && task) { openTask(task); if (action === 'reschedule') { $('#task-dialog-title').textContent = 'Muévelo, conserva la meta.'; $('#task-form').elements.date.focus(); } }
-  else if (action === 'add-workout') { openTask(); const form = $('#task-form'); form.elements.title.value = 'Entrenamiento · sesión reubicada'; form.elements.area.value = 'salud'; form.elements.workout.checked = true; form.elements.minutes.value = 35; }
+  else if (action === 'add-workout') openWorkout();
+  else if (action === 'workout-day') {
+    const result = toggleWorkoutDay(state, button.dataset.date);
+    if (result.status === 'empty') openWorkout(button.dataset.date);
+    else { persist(); render(); toast(result.status === 'done' ? 'Entrenamiento completado. Un día más para ti. ✓' : 'Entrenamiento marcado como pendiente.'); }
+  }
   else if (action === 'friday-mode') { const key = weekFor(selected)[0]; state.weekPlans ||= {}; state.weekPlans[key] = { ...weekPlan(state, selected), friday: button.dataset.mode }; persist(); render(); toast('Viernes ajustado solo para esta semana.'); }
   else if (action === 'tomorrow' && task) changeWithUndo('Movida al día siguiente. Sin drama.', () => moveTask(state, task, addDays(selected, 1)));
   else if (action === 'rhythm') { state.rhythms[selected] = button.dataset.rhythm; persist(); render(); }
@@ -280,11 +303,22 @@ document.addEventListener('click', event => {
   else if (action === 'edit-routine') openRoutine(button.closest('[data-routine-id]').dataset.routineId);
   else if (action === 'accent') { state.settings.accent = button.dataset.accent; persist(); applySettings(); document.querySelectorAll('.accent-choice').forEach(b => { const active = b.dataset.accent === state.settings.accent; b.classList.toggle('selected', active); b.setAttribute('aria-pressed', active); b.innerHTML = active ? icon('check') : ''; }); }
   else if (action === 'export') exportData();
+  else if (action === 'export-recovery') exportRecovery();
   else if (action === 'import') $('#import-file').click();
   else if (action === 'undo' && undoAction) { const undo = undoAction; clearTimeout(toastTimeout); undoAction = null; undo(); }
 });
 document.addEventListener('input', event => { if (event.target.id === 'daily-note') { state.notes[selected] = event.target.value; persist(); } });
 document.addEventListener('change', event => {
+  const form = event.target.closest('form');
+  if (['task-form', 'routine-form'].includes(form?.id) && event.target.name === 'area' && event.target.value === 'salud') {
+    form.elements.workout.checked = true;
+    form.elements.fixed.checked = false;
+  }
+  if (form?.id === 'task-form' && event.target.name === 'date' && validDate(event.target.value) && !editing) {
+    const days = new FormData(form).getAll('days').map(Number);
+    if (days.length === 1 && days[0] === asDate(draftDate).getDay()) dayChecks($('#repeat-days .weekday-checkboxes'), [asDate(event.target.value).getDay()]);
+    draftDate = event.target.value;
+  }
   if (event.target.id === 'date-picker' && validDate(event.target.value)) { selected = event.target.value; filter = 'all'; render(); }
   if (event.target.id === 'area-filter') { filter = event.target.value; render(); }
   if (event.target.name === 'repeat') $('#repeat-days').hidden = !event.target.checked;
@@ -317,7 +351,7 @@ $('#delete-routine').addEventListener('click', () => { if (!editingRoutine) retu
 window.addEventListener('hashchange', () => { route = ['day', 'week', 'routine', 'settings'].includes(location.hash.slice(1)) ? location.hash.slice(1) : 'day'; render(); window.scrollTo({ top: 0 }); });
 window.addEventListener('storage', event => {
   if (event.key !== STORAGE || !event.newValue) return;
-  try { state = upgradePlan(validateState(JSON.parse(event.newValue))); applySettings(); if (!document.querySelector('dialog[open]') && document.activeElement?.id !== 'daily-note') render(); else toast('Hubo cambios en otra pestaña. Cierra el editor para verlos.'); } catch {}
+  try { const next = upgradePlan(validateState(JSON.parse(event.newValue))); invalidateUndo(); state = next; corruptData = false; recoveryData = null; storageError = false; applySettings(); if (!document.querySelector('dialog[open]') && document.activeElement?.id !== 'daily-note') render(); else toast('Hubo cambios en otra pestaña. Cierra el editor para verlos.'); } catch {}
 });
 document.addEventListener('visibilitychange', () => { if (!document.hidden) updateTimerUI(); });
 setInterval(() => {
@@ -327,4 +361,4 @@ setInterval(() => {
 render();
 try { if (!corruptData) persist(); }
 catch { storageError = true; updateSaveStatus(); }
-if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(() => {});
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js', { updateViaCache: 'none' }).catch(() => {});

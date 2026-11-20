@@ -6,7 +6,15 @@ Organizador personal en español: plan diario y semanal, rutinas editables, vier
 
 `node server.mjs` abre un servidor local en http://127.0.0.1:4173.
 
-`node --test tests/core.test.mjs` ejecuta las pruebas de planificación, reprogramación, OT, respaldo y conservación de datos.
+`npm test` ejecuta las pruebas de planificación, reprogramación, OT, validación de respaldos, recuperación del guardado y caché sin conexión.
+
+## Entrenamientos
+
+El contador grande muestra días completados. Cada día se cuenta una sola vez, aunque tenga varias sesiones. Tocar un día vacío abre una reserva para esa fecha; tocar un día programado lo marca como completado, y volver a tocarlo lo deja pendiente. También puedes completar la tarea desde Mi día.
+
+Al elegir el área Movimiento al crear o editar una tarea, se activa Cuenta como entrenamiento. Puedes desmarcar esa opción para actividades que no quieras contar en la meta.
+
+Las versiones de los módulos, estilos y caché se coordinan para evitar mezclar archivos de publicaciones distintas. La actualización conserva las tareas y notas del navegador.
 
 ## GitHub Pages
 

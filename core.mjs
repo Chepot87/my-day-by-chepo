@@ -78,21 +78,48 @@ export function dayStats(state, date) {
   const essential = tasks.filter(t => !t.fixed && !t.optional);
   return { total: essential.length, done: essential.filter(t => t.done).length, minutes: essential.filter(t => !t.done).reduce((n, t) => n + t.minutes, 0), optional: tasks.filter(t => t.optional).length, fixed: tasks.filter(t => t.fixed).length };
 }
-export function isWorkout(task) { return task.workout === true || (task.area === 'salud' && task.workout !== false); }
+export function isWorkout(task) { return !task.fixed && (task.workout === true || (task.area === 'salud' && task.workout !== false)); }
 export function workoutStats(state, date) {
   const days = weekFor(date).map(key => { const workouts = tasksFor(state, key).filter(isWorkout); return { date: key, planned: workouts.length > 0, done: workouts.some(t => t.done) }; });
   return { days, planned: days.filter(d => d.planned).length, done: days.filter(d => d.done).length, target: 3 };
 }
+export function toggleWorkoutDay(state, date) {
+  const workouts = tasksFor(state, date).filter(isWorkout);
+  if (!workouts.length) return { status: 'empty' };
+  const completed = workouts.filter(task => task.done);
+  if (completed.length) {
+    for (const task of completed) putTask(state, { ...task, done: false });
+    return { status: 'pending' };
+  }
+  putTask(state, { ...workouts[0], done: true });
+  return { status: 'done' };
+}
+export function readSavedState(readRaw) {
+  let rawData = null;
+  try { rawData = readRaw(); }
+  catch { return { state: makeInitialState(), storageError: true, corruptData: false, rawData }; }
+  if (!rawData) return { state: makeInitialState(), storageError: false, corruptData: false, rawData };
+  try { return { state: upgradePlan(validateState(JSON.parse(rawData))), storageError: false, corruptData: false, rawData }; }
+  catch { return { state: makeInitialState(), storageError: true, corruptData: true, rawData }; }
+}
+export function validTimerSnapshot(value) {
+  return !!value && Number.isInteger(value.remaining) && value.remaining >= 0 && value.remaining <= 7200 && typeof value.running === 'boolean' && (value.running ? Number.isFinite(value.endAt) && value.endAt > 0 : value.endAt === null);
+}
 export function validateState(s) {
-  if (!s || s.version !== 1 || !Array.isArray(s.tasks) || !Array.isArray(s.routines) || !s.overrides || typeof s.overrides !== 'object' || Array.isArray(s.overrides) || !s.settings || !s.notes || !s.rhythms) throw new Error('Este archivo no es un respaldo de Mi Día.');
+  const record = value => !!value && typeof value === 'object' && !Array.isArray(value);
+  const id = value => typeof value === 'string' && value.length > 0 && value.length < 250 && !['__proto__', 'constructor', 'prototype'].includes(value);
+  const time = value => typeof value === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(value);
+  if (!record(s) || s.version !== 1 || !Array.isArray(s.tasks) || !Array.isArray(s.routines) || !record(s.overrides) || !record(s.settings) || !record(s.notes) || !record(s.rhythms)) throw new Error('Este archivo no es un respaldo de My Day.');
   if (s.tasks.length + s.routines.length + Object.keys(s.overrides).length > 50000) throw new Error('El respaldo es demasiado grande.');
-  const validTask = t => t && typeof t.id === 'string' && t.id.length < 250 && typeof t.title === 'string' && t.title.trim().length > 0 && t.title.length <= 180 && Object.hasOwn(AREAS, t.area) && Number.isFinite(t.minutes) && t.minutes >= 0 && t.minutes <= 1440 && (t.time === '' || (typeof t.time === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(t.time))) && typeof t.note === 'string' && t.note.length <= 2000;
+  const validTask = t => record(t) && id(t.id) && typeof t.title === 'string' && t.title.trim().length > 0 && t.title.length <= 180 && Object.hasOwn(AREAS, t.area) && Number.isFinite(t.minutes) && t.minutes >= 0 && t.minutes <= 1440 && (t.time === '' || time(t.time)) && typeof t.note === 'string' && t.note.length <= 2000 && ['done', 'priority', 'workout', 'optional', 'fixed', 'hidden'].every(key => t[key] === undefined || typeof t[key] === 'boolean') && (t.routineId === undefined || id(t.routineId)) && (t.friday === undefined || ['off', 'ot'].includes(t.friday)) && !(t.fixed && t.workout);
   if (s.tasks.some(t => !validTask(t) || !validDate(t.date)) || s.routines.some(t => !validTask(t) || !Array.isArray(t.days) || !t.days.length || t.days.some(d => !Number.isInteger(d) || d < 0 || d > 6)) || Object.values(s.overrides).some(t => !validTask(t) || !validDate(t.date))) throw new Error('Hay tareas inválidas en el respaldo.');
   if (Object.entries(s.overrides).some(([key, t]) => t.id !== key)) throw new Error('Las tareas del respaldo no coinciden.');
-  if (typeof s.settings.name !== 'string' || s.settings.name.length > 40 || !Number.isInteger(s.settings.focusMinutes) || s.settings.focusMinutes < 5 || s.settings.focusMinutes > 120 || !['lime', 'violet', 'cyan'].includes(s.settings.accent)) throw new Error('Los ajustes del respaldo no son válidos.');
+  if (new Set(s.tasks.map(t => t.id)).size !== s.tasks.length || new Set(s.routines.map(t => t.id)).size !== s.routines.length) throw new Error('El respaldo contiene identificadores duplicados.');
+  if (typeof s.settings.name !== 'string' || !s.settings.name.trim() || s.settings.name.length > 40 || !Number.isInteger(s.settings.focusMinutes) || s.settings.focusMinutes < 5 || s.settings.focusMinutes > 120 || !['lime', 'violet', 'cyan'].includes(s.settings.accent)) throw new Error('Los ajustes del respaldo no son válidos.');
   for (const [date, note] of Object.entries(s.notes)) if (!validDate(date) || typeof note !== 'string' || note.length > 5000) throw new Error('Una nota del respaldo no es válida.');
   for (const [date, rhythm] of Object.entries(s.rhythms)) if (!validDate(date) || !['soft', 'normal', 'full'].includes(rhythm)) throw new Error('Un ritmo del respaldo no es válido.');
   for (const field of ['otStart', 'otEnd']) if (s.settings[field] !== undefined && (typeof s.settings[field] !== 'string' || !/^([01]\d|2[0-3]):[0-5]\d$/.test(s.settings[field]))) throw new Error('La hora predeterminada de OT no es válida.');
+  if (s.settings.otStart && s.settings.otEnd && timeMinutes(s.settings.otEnd) <= timeMinutes(s.settings.otStart)) throw new Error('La salida predeterminada de OT debe ser después de la entrada.');
   if (s.weekPlans !== undefined) {
     if (!s.weekPlans || typeof s.weekPlans !== 'object' || Array.isArray(s.weekPlans)) throw new Error('Las semanas del respaldo no son válidas.');
     for (const [date, plan] of Object.entries(s.weekPlans)) {
